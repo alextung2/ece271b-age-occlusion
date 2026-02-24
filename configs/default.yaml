@@ -1,0 +1,43 @@
+seed: 271
+
+data:
+  utkface_root: "C:/Users/alex_tung/OneDrive/桌面/ECE 271B/archive/UTKFace"
+  image_size: 128
+  split:
+    train: 0.70
+    val: 0.15
+    test: 0.15
+
+labels:
+  bins: [1, 10, 20, 30]
+  bin_names: ["1-9","10-19","20-29"]
+  min_age: 1
+  max_age: 29
+
+occlusion:
+  types: ["none", "eyes", "mouth", "center"]
+  fill: "mean"
+
+classical:
+  pca_components: 100
+  kpca_components: 200
+  kpca_kernel: "rbf"
+  kpca_gamma: 0.001
+  svm_C: 10.0
+  svm_kernel: "linear"
+  gaussian_reg: 1.0e-3
+
+mlp:
+  hidden_sizes: [512, 256]
+  dropout: 0.2
+  lr: 1.0e-3
+  epochs: 20
+  batch_size: 128
+
+cnn:
+  backbone: "resnet18"
+  pretrained: true
+  lr: 3.0e-4
+  epochs: 10
+  batch_size: 64
+  weight_decay: 1.0e-4

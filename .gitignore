@@ -1,0 +1,21 @@
+# python
+__pycache__/
+*.pyc
+
+# venv
+.venv/
+venv/
+env/
+
+# outputs (keep splits if you want)
+outputs/models/
+outputs/results/
+
+# data
+archive/
+data/
+
+# misc
+.vscode/
+.DS_Store
+Thumbs.db
