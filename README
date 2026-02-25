@@ -46,8 +46,18 @@ Models: outputs/models/
 
 ## Notes
 
-- Age prediction is binned classification
-- Training uses clean images
-- Occlusion is applied only at evaluation
-- CNN backbone: pretrained ResNet-18
+- Task: Age prediction is formulated as 3-class binned classification (1-9, 10-19, 20-29).
 
+- Training protocol: All models train on clean faces and are evaluated under occlusion.
+
+- Occlusion types: none, eyes, mouth, center.
+
+- Class imbalance: Dataset is skewed toward the oldest age bin (roughly 73% are age 20-29 images), so macro-F1 is the primary metric.
+
+- PCA: Uses whitening to stabilize the Gaussian classifier.
+
+- LDA: Output dimension is automatically ≤ (C − 1).
+
+- CNN: Uses ImageNet-pretrained ResNet-18 backbone.
+
+- Reproducibility: Global seed is controlled in configs/default.yaml.
