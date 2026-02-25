@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 
+
 from src.config import Config
 from src.utils import set_seed
 from src.data.utkface import discover_utkface, load_image_rgb

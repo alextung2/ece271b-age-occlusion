@@ -1,21 +1,29 @@
-# python
+# ========================
+# Python
+# ========================
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# venv
+# ========================
+# Virtual environments
+# ========================
 .venv/
 venv/
 env/
 
-# outputs (keep splits if you want)
+# ========================
+# Large data / outputs
+# ========================
+archive/
+data/
 outputs/models/
 outputs/results/
 
-# data
-archive/
-data/
-
-# misc
-.vscode/
+# ========================
+# OS / editor junk
+# ========================
 .DS_Store
 Thumbs.db
+.vscode/

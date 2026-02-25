@@ -1,0 +1,53 @@
+## ECE 271B — Age Classification under Occlusion
+
+Age group classification on UTKFace under synthetic occlusions using classical methods and deep models.
+
+------------------------------------------------------------------------------------------
+
+## Team
+
+- Alexander Tung  
+- Alexander Wang  
+- Luke Wittemann  
+
+------------------------------------------------------------------------------------------
+
+## Setup
+
+Create a virtual environment and install dependencies:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+Set the UTKFace dataset path in:
+configs/default.yaml
+
+------------------------------------------------------------------------------------------
+
+## Run Experiments
+
+python -m scripts.train_eval_pca_gaussian
+python -m scripts.train_eval_lda_gaussian
+python -m scripts.train_eval_kpca_svm
+python -m scripts.train_eval_cnn
+python -m scripts.train_eval_mlp
+
+------------------------------------------------------------------------------------------
+
+## Outputs
+
+Results: outputs/results/*.json
+Models: outputs/models/
+
+------------------------------------------------------------------------------------------
+
+## Notes
+
+- Age prediction is binned classification
+- Training uses clean images
+- Occlusion is applied only at evaluation
+- CNN backbone: pretrained ResNet-18
+
