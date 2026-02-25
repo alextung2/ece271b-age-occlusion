@@ -17,7 +17,7 @@ env/
 # Large data / outputs
 # ========================
 archive/
-data/
+/data/
 outputs/models/
 outputs/results/
 
