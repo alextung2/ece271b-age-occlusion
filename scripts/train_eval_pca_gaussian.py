@@ -25,13 +25,6 @@ def images_to_matrix(
     occlusion_type: str,
     fill: str,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Load (and optionally occlude) images for given sample indices.
-
-    Returns:
-      X: (N, D) float32
-      y: (N,) int64
-    """
     n = len(samples)
     if len(indices) == 0:
         raise ValueError("Got empty indices list (no samples to load).")
@@ -44,11 +37,9 @@ def images_to_matrix(
             raise IndexError(f"Index {i} out of bounds for samples of length {n}.")
 
         s = samples[i]
-        img = load_image_gray(s.path, image_size=image_size)  # (H,W)
+        img = load_image_gray(s.path, image_size=image_size)
 
-        # Ensure 'none' is always a no-op
         if occlusion_type is not None and str(occlusion_type).lower() != "none":
-            # Match your LDA script style: occlude_region(img, occlusion_type, fill=fill)
             img = occlude_region(img, occlusion_type, fill=fill)
 
         X_list.append(img.reshape(-1))
@@ -94,30 +85,27 @@ def main() -> None:
     occ_types = cfg.get("occlusion.types", ["none", "eyes", "mouth", "center"])
     fill = cfg.get("occlusion.fill", "mean")
 
-    # ---- Train data (always clean) ----
     Xtr, ytr = images_to_matrix(samples, list(map(int, split.train)), image_size, "none", fill)
 
-    # ---- Fit PCA on train only ----
-    n_pca = int(cfg.get("classical.pca_components", 100))
-    pca_model = fit_pca(Xtr, n_components=n_pca)
-
+    n_pca = int(cfg.get("classical.pca_components", 200))  # try 200-400 on this dataset
+    pca_model = fit_pca(Xtr, n_components=n_pca, whiten=True)
     Ztr = transform_pca(pca_model, Xtr)
 
-    # ---- Fit Gaussian on PCA features ----
     reg = float(cfg.get("classical.gaussian_reg", 1e-3))
-    clf = fit_gaussian_classifier(Ztr, ytr, reg=reg)
+    diagonal = bool(cfg.get("classical.gaussian_diagonal", True))
+    shared_cov = bool(cfg.get("classical.gaussian_shared_cov", False))
 
-    # Determine K robustly from union of train+test labels
+    clf = fit_gaussian_classifier(Ztr, ytr, reg=reg, shared_cov=shared_cov, diagonal=diagonal)
+
     _, yte_clean = images_to_matrix(samples, list(map(int, split.test)), image_size, "none", fill)
     classes_all = np.unique(np.concatenate([ytr, yte_clean]))
-    K = int(classes_all.max()) + 1  # assumes labels are 0..K-1 (your bins code likely does this)
+    K = int(classes_all.max()) + 1
 
     metrics: Dict[str, Dict[str, float]] = {}
     confmats: Dict[str, List[List[int]]] = {}
 
-    # ---- Eval on test for each occlusion ----
     for occ in occ_types:
-        Xte, yte = images_to_matrix(samples, list(map(int, split.test)), image_size, occ, fill)
+        Xte, yte = images_to_matrix(samples, list(map(int, split.test)), image_size, str(occ), fill)
         Zte = transform_pca(pca_model, Xte)
         yhat = predict_gaussian(clf, Zte)
 
@@ -130,7 +118,6 @@ def main() -> None:
 
         print(f"[pca_gaussian] occ={str(occ):>6s} acc={acc:.4f} macro_f1={mf1:.4f}")
 
-    # ---- Save artifacts (match lda_gaussian structure) ----
     out_dir = Path("outputs")
     model_dir = out_dir / "models"
     res_dir = out_dir / "results"
@@ -148,7 +135,12 @@ def main() -> None:
         "bins": bins,
         "image_size": image_size,
         "occlusion": {"types": occ_types, "fill": fill},
-        "hyperparams": {"pca_components": n_pca, "gaussian_reg": reg},
+        "hyperparams": {
+            "pca_components": n_pca,
+            "gaussian_reg": reg,
+            "gaussian_diagonal": diagonal,
+            "gaussian_shared_cov": shared_cov,
+        },
         "metrics": metrics,
         "confusion_matrices": confmats,
         "train_classes": np.unique(ytr).tolist(),

@@ -65,7 +65,7 @@ def validate_split(split: Split, n: int) -> None:
       - all indices are ints
       - all indices are within [0, n)
       - no duplicates across splits
-      - (optionally) covers all indices exactly once
+      - covers all indices exactly once
     """
     all_lists = [split.train, split.val, split.test]
     all_idx = [i for lst in all_lists for i in lst]

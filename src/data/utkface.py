@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Union
+from typing import List, Union, Optional
 import re
 
 import cv2
@@ -20,14 +20,18 @@ def age_to_bin(age: int, bins: List[int]) -> int:
     """
     bins example: [0,10,20,30,40,50,60,200] -> 7 classes
     returns class index in [0, K-1]
+    interval is [bins[k], bins[k+1])
     """
     assert isinstance(age, int) and age >= 0, "age must be a nonnegative int"
-    assert len(bins) >= 2 and all(bins[i] < bins[i + 1] for i in range(len(bins) - 1)), "bins must be increasing"
+    assert len(bins) >= 2, "bins must have at least 2 edges"
+    assert all(bins[i] < bins[i + 1] for i in range(len(bins) - 1)), "bins must be strictly increasing"
 
     for k in range(len(bins) - 1):
         if bins[k] <= age < bins[k + 1]:
             return k
-    return len(bins) - 2  # fallback
+
+    # IMPORTANT: do NOT silently map to last class; it hides bugs.
+    raise ValueError(f"Age {age} is outside bin edges {bins}")
 
 
 UTK_RE = re.compile(
@@ -37,16 +41,31 @@ UTK_RE = re.compile(
 )
 
 
-def discover_utkface(root: Union[str, Path], bins: List[int], debug: bool = True) -> List[UtkSample]:
+def discover_utkface(
+    root: Union[str, Path],
+    bins: List[int],
+    min_age: int | None = None,
+    max_age: int | None = None,
+    debug: bool = True,
+) -> List[UtkSample]:
     root = Path(root)
     assert root.exists(), f"UTKFace root not found: {root}"
     assert root.is_dir(), f"UTKFace root is not a directory: {root}"
+
+    if min_age is not None:
+        assert isinstance(min_age, int) and min_age >= 0, "min_age must be a nonnegative int"
+    if max_age is not None:
+        assert isinstance(max_age, int) and max_age >= 0, "max_age must be a nonnegative int"
+    if min_age is not None and max_age is not None:
+        assert min_age <= max_age, "min_age must be <= max_age"
 
     all_files = [p for p in root.rglob("*") if p.is_file()]
 
     samples: List[UtkSample] = []
     scanned = 0
     matched = 0
+    filtered_by_age = 0
+    skipped_outside_bins = 0
     first_few_nonmatches: List[str] = []
 
     for p in all_files:
@@ -61,15 +80,33 @@ def discover_utkface(root: Union[str, Path], bins: List[int], debug: bool = True
 
         matched += 1
         age = int(m.group(1))
-        y = age_to_bin(age, bins)
+
+        if min_age is not None and age < min_age:
+            filtered_by_age += 1
+            continue
+        if max_age is not None and age > max_age:
+            filtered_by_age += 1
+            continue
+
+        try:
+            y = age_to_bin(age, bins)
+        except ValueError:
+            skipped_outside_bins += 1
+            continue
+
         samples.append(UtkSample(path=p, age=age, y=y))
 
     if len(samples) == 0:
         msg = (
-            "No UTKFace images found that match expected filename patterns.\n"
+            "No UTKFace images found that match expected filename patterns"
+            " (or all were filtered out).\n"
             f"Root: {root}\n"
             f"Total files scanned: {scanned}\n"
             f"Regex-matched filenames: {matched}\n"
+            f"Filtered by age: {filtered_by_age}\n"
+            f"Skipped outside bins: {skipped_outside_bins}\n"
+            f"min_age={min_age}, max_age={max_age}\n"
+            f"bins={bins}\n"
             "Expected examples like:\n"
             "  25_0_2_20170116174525125.jpg\n"
             "  25_0_2_20170116174525125.jpg.chip\n"
@@ -80,8 +117,18 @@ def discover_utkface(root: Union[str, Path], bins: List[int], debug: bool = True
         raise AssertionError(msg)
 
     if debug:
+        ages = [s.age for s in samples]
+        n_40_49 = sum(40 <= a <= 49 for a in ages)
+        n_50_59 = sum(50 <= a <= 59 for a in ages)
+        n_60p = sum(a >= 60 for a in ages)
+
         print(f"[discover_utkface] root={root}")
-        print(f"[discover_utkface] total_files={scanned} matched={matched} samples={len(samples)}")
+        print(
+            f"[discover_utkface] total_files={scanned} matched={matched} "
+            f"filtered_by_age={filtered_by_age} skipped_outside_bins={skipped_outside_bins} "
+            f"samples={len(samples)}"
+        )
+        print(f"[discover_utkface] raw age counts: 40-49={n_40_49}, 50-59={n_50_59}, 60+={n_60p}")
         print(f"[discover_utkface] example: {samples[0].path.name} (age={samples[0].age}, y={samples[0].y})")
 
     return samples

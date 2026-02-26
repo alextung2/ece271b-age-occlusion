@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-
 
 from src.config import Config
 from src.utils import set_seed
@@ -18,6 +16,11 @@ from src.data.occlusion import occlude_region
 from src.models.cnn import build_cnn
 from src.train.torch_train import train_classifier
 from src.eval.metrics import overall_accuracy, macro_f1, confmat
+
+
+# ImageNet normalization (IMPORTANT when using pretrained=True)
+IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(3, 1, 1)
+IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(3, 1, 1)
 
 
 def _to_int_list(x) -> List[int]:
@@ -32,9 +35,7 @@ def save_json(obj: Dict, path: Path) -> None:
 
 def occlude_rgb(img_hwc: np.ndarray, occlusion_type: str, fill: str) -> np.ndarray:
     """
-    Apply the same occlusion region to an RGB image by applying occlude_region
-    channel-wise. Assumes occlude_region works on 2D arrays.
-
+    Apply occlusion to an RGB image by applying occlude_region channel-wise.
     img_hwc: (H, W, 3) float32 in [0,1]
     """
     if occlusion_type is None or str(occlusion_type).lower() == "none":
@@ -42,10 +43,26 @@ def occlude_rgb(img_hwc: np.ndarray, occlusion_type: str, fill: str) -> np.ndarr
 
     assert isinstance(img_hwc, np.ndarray) and img_hwc.ndim == 3 and img_hwc.shape[2] == 3
     out = img_hwc.copy()
-    # Apply the region mask separately to each channel (same region geometry).
     for c in range(3):
         out[..., c] = occlude_region(out[..., c], occlusion_type, fill=fill)
     return out
+
+
+def _rand_color_jitter(x: torch.Tensor, brightness: float = 0.15, contrast: float = 0.15) -> torch.Tensor:
+    """
+    Lightweight color jitter without torchvision.transforms dependency.
+    x: (3,H,W) in [0,1]
+    """
+    # brightness
+    b = (1.0 + (2.0 * torch.rand(1).item() - 1.0) * brightness)
+    x = x * b
+
+    # contrast
+    c = (1.0 + (2.0 * torch.rand(1).item() - 1.0) * contrast)
+    mean = x.mean(dim=(1, 2), keepdim=True)
+    x = (x - mean) * c + mean
+
+    return x.clamp(0.0, 1.0)
 
 
 class RgbFaceDataset(Dataset):
@@ -57,12 +74,16 @@ class RgbFaceDataset(Dataset):
         *,
         occlusion_type: str = "none",
         fill: str = "mean",
+        augment: bool = False,
+        imagenet_norm: bool = True,
     ):
         self.samples = samples
         self.indices = _to_int_list(indices)
         self.image_size = int(image_size)
         self.occlusion_type = str(occlusion_type)
         self.fill = str(fill)
+        self.augment = bool(augment)
+        self.imagenet_norm = bool(imagenet_norm)
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -75,9 +96,21 @@ class RgbFaceDataset(Dataset):
         # Occlusion (no-op if "none")
         img = occlude_rgb(img, self.occlusion_type, fill=self.fill)
 
-        # TODO: add augmentation here if desired (flip, jitter, etc.)
-        x = torch.from_numpy(img).permute(2, 0, 1).float()  # (3,H,W)
+        x = torch.from_numpy(img).permute(2, 0, 1).float()  # (3,H,W) in [0,1]
         y = int(s.y)
+
+        # Train-only augmentation
+        if self.augment:
+            # horizontal flip
+            if torch.rand(1).item() < 0.5:
+                x = torch.flip(x, dims=[2])
+            # small color jitter
+            x = _rand_color_jitter(x, brightness=0.15, contrast=0.15)
+
+        # ImageNet normalization (critical for pretrained resnet)
+        if self.imagenet_norm:
+            x = (x - IMAGENET_MEAN) / IMAGENET_STD
+
         return x, y
 
 
@@ -139,33 +172,30 @@ def main() -> None:
     va_idx = _to_int_list(split.val)
     te_idx = _to_int_list(split.test)
 
-    # Infer num_classes safely from the data (robust to config mismatch)
+    # Infer num_classes from training labels
     y_tr = np.array([int(samples[i].y) for i in tr_idx], dtype=np.int64)
     train_classes = np.unique(y_tr)
     if train_classes.size < 2:
         raise RuntimeError(f"Need >=2 classes in training split; got {train_classes.tolist()}")
-
-    # If you really want to tie to cfg labels.bin_names, you can assert they agree:
-    bin_names = cfg.get("labels.bin_names")
-    if bin_names is not None:
-        expected = len(bin_names)
-        inferred = int(train_classes.max()) + 1
-        if expected != inferred:
-            raise ValueError(
-                f"num_classes mismatch: len(labels.bin_names)={expected} but inferred from train labels is {inferred}. "
-                "Fix your config or label mapping."
-            )
-        num_classes = expected
-    else:
-        num_classes = int(train_classes.max()) + 1
+    num_classes = int(train_classes.max()) + 1
 
     # Occlusion config (for TEST evaluation only)
     occ_types = cfg.get("occlusion.types", ["none", "eyes", "mouth", "center"])
     fill = cfg.get("occlusion.fill", "mean")
 
-    # ---- Datasets / loaders (train/val clean only) ----
-    ds_tr = RgbFaceDataset(samples, tr_idx, image_size=image_size, occlusion_type="none", fill=fill)
-    ds_va = RgbFaceDataset(samples, va_idx, image_size=image_size, occlusion_type="none", fill=fill)
+    # ---- Datasets / loaders ----
+    ds_tr = RgbFaceDataset(
+        samples, tr_idx, image_size=image_size,
+        occlusion_type="none", fill=fill,
+        augment=True,
+        imagenet_norm=True,
+    )
+    ds_va = RgbFaceDataset(
+        samples, va_idx, image_size=image_size,
+        occlusion_type="none", fill=fill,
+        augment=False,
+        imagenet_norm=True,
+    )
 
     batch_size = int(cfg.get("cnn.batch_size", 64))
     num_workers = int(cfg.get("cnn.num_workers", 2))
@@ -186,7 +216,8 @@ def main() -> None:
     model = build_cnn(backbone=backbone, num_classes=num_classes, pretrained=pretrained)
 
     # ---- Train ----
-    epochs = int(cfg.get("cnn.epochs", 10))
+    # Suggested: bump epochs in config to 20-25 for better convergence
+    epochs = int(cfg.get("cnn.epochs", 20))
     lr = float(cfg.get("cnn.lr", 3e-4))
     weight_decay = float(cfg.get("cnn.weight_decay", 1e-4))
 
@@ -207,17 +238,15 @@ def main() -> None:
     metrics: Dict[str, Dict[str, float]] = {}
     confmats: Dict[str, List[List[int]]] = {}
 
-    # Determine union of train+test classes for reporting (like your PCA/LDA)
     y_te_clean = np.array([int(samples[i].y) for i in te_idx], dtype=np.int64)
     eval_classes_union = np.unique(np.concatenate([y_tr, y_te_clean]))
 
     for occ in occ_types:
         ds_te = RgbFaceDataset(
-            samples,
-            te_idx,
-            image_size=image_size,
-            occlusion_type=str(occ),
-            fill=fill,
+            samples, te_idx, image_size=image_size,
+            occlusion_type=str(occ), fill=fill,
+            augment=False,
+            imagenet_norm=True,
         )
         te_loader = DataLoader(
             ds_te, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory
@@ -236,7 +265,6 @@ def main() -> None:
     model_dir.mkdir(parents=True, exist_ok=True)
     res_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save weights + minimal metadata (so you can reload)
     torch.save(
         {
             "state_dict": result.best_state_dict,
@@ -264,6 +292,8 @@ def main() -> None:
             "batch_size": batch_size,
             "lr": lr,
             "weight_decay": weight_decay,
+            "imagenet_norm": True,
+            "augment": True,
         },
         "metrics": metrics,
         "confusion_matrices": confmats,
