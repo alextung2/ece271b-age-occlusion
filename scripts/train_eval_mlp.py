@@ -6,8 +6,7 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
-
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from src.config import Config
 from src.utils import set_seed
 from src.data.utkface import discover_utkface, load_image_gray
@@ -28,7 +27,7 @@ def save_json(obj: Dict, path: Path) -> None:
         json.dump(obj, f, indent=2)
 
 
-def _normalize_flat(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+def _normalize_flat(x: torch.Tensor, eps: float = 1e-3) -> torch.Tensor:
     """
     Per-sample normalization: (x - mean)/std.
     Works well for MLP on raw pixels and avoids needing dataset-wide stats.
@@ -64,7 +63,12 @@ class FlatFaceDataset(Dataset):
         img = load_image_gray(self.samples[i].path, image_size=self.image_size)  # (H,W) float32 [0,1]
 
         # Occlusion (no-op if "none")
-        if self.occlusion_type.lower() != "none":
+        # Occlusion (random during training if occlusion_type == "random")
+        if self.occlusion_type.lower() == "random":
+            occ = np.random.choice(["none", "eyes", "mouth", "center"])
+            if occ != "none":
+                img = occlude_region(img, occ, fill=self.fill)
+        elif self.occlusion_type.lower() != "none":
             img = occlude_region(img, self.occlusion_type, fill=self.fill)
 
         x = torch.from_numpy(img.reshape(-1)).float()
@@ -158,12 +162,29 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     pin_memory = device == "cuda"
 
-    ds_tr = FlatFaceDataset(samples, tr_idx, image_size=image_size, occlusion_type="none", fill=fill, normalize=True)
+    ds_tr = FlatFaceDataset(samples, tr_idx, image_size=image_size, occlusion_type="random", fill=fill, normalize=True)
     ds_va = FlatFaceDataset(samples, va_idx, image_size=image_size, occlusion_type="none", fill=fill, normalize=True)
 
-    train_loader = DataLoader(
-        ds_tr, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory
+        # ---- Balanced sampling to improve macro-F1 (no trainer changes) ----
+    counts = np.bincount(y_tr, minlength=num_classes).astype(np.float32)
+    class_w = counts.sum() / np.clip(counts, 1.0, None)   # inverse frequency
+    sample_w = class_w[y_tr]                               # aligns with ds_tr/tr_idx ordering
+
+    sampler = WeightedRandomSampler(
+        weights=torch.as_tensor(sample_w, dtype=torch.double),
+        num_samples=len(sample_w),
+        replacement=True,
     )
+
+    train_loader = DataLoader(
+        ds_tr,
+        batch_size=batch_size,
+        sampler=sampler,   # sampler replaces shuffle
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+
     val_loader = DataLoader(
         ds_va, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory
     )

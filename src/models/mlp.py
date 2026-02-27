@@ -104,22 +104,12 @@ class MLP(nn.Module):
         use_layernorm = True  # you can wire this to config later if you want
 
         for h in hidden_sizes:
-            if use_layernorm:
-                # normalize current representation (size = prev)
-                layers.append(nn.LayerNorm(prev))
-
-            if dropout > 0:
-                # dropout on inputs to the next linear (often better than after activation)
-                layers.append(nn.Dropout(dropout))
-
             layers.append(nn.Linear(prev, h))
+            if use_layernorm:
+                layers.append(nn.LayerNorm(h)) # Use 'h' instead of 'prev'
             layers.append(_make_activation(activation))
-
-            if use_batchnorm:
-                # If you really want BN, use it AFTER Linear (size = h)
-                # (Don't combine BN + LN at the same time; pick one.)
-                layers.append(nn.BatchNorm1d(h))
-
+            if dropout > 0:
+                layers.append(nn.Dropout(dropout))
             prev = h
 
         # ============================================================
