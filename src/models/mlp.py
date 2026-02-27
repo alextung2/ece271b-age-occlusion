@@ -100,20 +100,25 @@ class MLP(nn.Module):
         #
         # ============================================================
 
+        # --- choose one normalization (LayerNorm usually best for MLP) ---
+        use_layernorm = True  # you can wire this to config later if you want
+
         for h in hidden_sizes:
+            if use_layernorm:
+                # normalize current representation (size = prev)
+                layers.append(nn.LayerNorm(prev))
+
+            if dropout > 0:
+                # dropout on inputs to the next linear (often better than after activation)
+                layers.append(nn.Dropout(dropout))
+
             layers.append(nn.Linear(prev, h))
-
-            # ----- optional normalization -----
-            if use_batchnorm:
-                layers.append(nn.BatchNorm1d(h))
-
-            # ----- activation -----
-            # IMPORTANT FIX: create a NEW activation each layer
             layers.append(_make_activation(activation))
 
-            # ----- dropout -----
-            if dropout > 0:
-                layers.append(nn.Dropout(dropout))
+            if use_batchnorm:
+                # If you really want BN, use it AFTER Linear (size = h)
+                # (Don't combine BN + LN at the same time; pick one.)
+                layers.append(nn.BatchNorm1d(h))
 
             prev = h
 
@@ -144,7 +149,7 @@ def build_mlp(
     hidden_sizes: List[int],
     dropout: float,
     activation: ActivationName = "relu",
-    use_batchnorm: bool = False,
+    use_batchnorm: bool = True,
 ) -> MLP:
     """
     Factory function used by training scripts.

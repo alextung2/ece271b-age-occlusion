@@ -2,8 +2,9 @@ seed: 271
 
 data:
   utkface_root: "/Users/taota/Documents/Uni/Master/Statistical learning /Project/ece271b-age-occlusion/try_dataset/UTKFace"
-  train: 0.70
-  val: 0.15
+  split:
+    train: 0.70
+    val: 0.15
 
 labels:
   # 7 bins:
