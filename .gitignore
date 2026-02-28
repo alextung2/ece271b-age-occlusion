@@ -19,7 +19,6 @@ env/
 archive/
 /data/
 outputs/models/
-outputs/results/
 
 # ========================
 # OS / editor junk
