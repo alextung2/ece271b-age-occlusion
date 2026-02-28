@@ -1,10 +1,9 @@
 seed: 271
 
 data:
-  utkface_root: "C:/Users/alex_tung/OneDrive/桌面/ECE 271B/ECE 271B_Age_Occlusion_Project/try_dataset/UTKFace"
-  split:
-    train: 0.70
-    val: 0.15
+  utkface_root: "/Users/taota/Documents/Uni/Master/Statistical learning /Project/ece271b-age-occlusion/try_dataset/UTKFace"
+  train: 0.70
+  val: 0.15
   image_size: 128
 
 labels:
@@ -72,11 +71,11 @@ cnn:
 
 # -------- MLP baseline (if you use it) --------
 mlp:
-  hidden_sizes: [512, 256]
-  dropout: 0.3
-  activation: "relu"      # try "gelu" later
+  hidden_sizes: [1024, 512, 256]
+  dropout: 0.4
+  activation: "relu"      #  "gelu"doest work 
   use_batchnorm: false    # if you’re using LayerNorm inside mlp.py
-  epochs: 50
+  epochs: 80
   batch_size: 128
   lr: 0.001
   weight_decay: 0.0001
