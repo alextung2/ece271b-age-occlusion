@@ -1,7 +1,7 @@
 seed: 271
 
 data:
-  utkface_root: "/Users/taota/Documents/Uni/Master/Statistical learning /Project/ece271b-age-occlusion/try_dataset/UTKFace"
+  utkface_root: "C:/Users/alex_tung/OneDrive/桌面/ECE 271B/ECE 271B_Age_Occlusion_Project/try_dataset/UTKFace"
   split:
     train: 0.70
     val: 0.15
@@ -35,11 +35,10 @@ gaussian:
 
 # -------- CNN pipeline --------
 cnn:
-  device: "cuda"          # "cuda" | "cpu" | "auto"
+  device: "cuda"
   backbone: "resnet18"
   pretrained: true
 
-  # Use ImageNet-sized input for pretrained ResNet
   image_size: 224
   epochs: 120
   batch_size: 128
@@ -48,28 +47,27 @@ cnn:
   num_workers: 4
   prefetch_factor: 2
 
-  scheduler: "cosine"     # "cosine" or "none"
+  scheduler: "cosine"
   select_metric: "acc"
 
-  # stability / generalization
   amp: true
   grad_clip: 1.0
-  label_smoothing: 0.05   # often helps on noisy UTKFace labels
+  label_smoothing: 0.05
 
-  # imbalance handling
-  class_weight_kind: "none"   # cleaner top-1 acc; switch to "sqrt_inv" if needed
+  # imbalance handling (this is the big one)
+  class_weight_kind: "sqrt_inv"   # try "effective" if you want higher macro-F1
 
   # augmentations (train only)
   crop_aug: true
-  cnn.crop_scale_min: 0.90    # gentler crop (was effectively 0.75)
-  cnn.crop_scale_max: 1.00
-  erasing_p: 0.0              # clean-acc run (turn back on for robustness)
+  crop_scale_min: 0.85            # a bit stronger than 0.90
+  crop_scale_max: 1.00
+  erasing_p: 0.10                 # small; bump later for robustness
 
   # eval stabilization (val/test)
-  eval_center_crop_frac: 0.90 # reduces background influence; set 0.0 to disable
+  eval_center_crop_frac: 0.0      # disable first to avoid train/eval mismatch
 
   # occlusion augmentation (train only)
-  occlusion_aug_prob: 0.0     # clean-acc run (set 0.2 for robustness fine-tune)
+  occlusion_aug_prob: 0.0         # keep 0.0 for clean benchmark; fine-tune later
   occlusion_aug_types: ["eyes", "mouth", "center"]
 
 # -------- MLP baseline (if you use it) --------

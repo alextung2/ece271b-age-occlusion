@@ -376,6 +376,10 @@ def main() -> None:
 
     y_tr = np.array([int(samples[i].y) for i in tr_idx], dtype=np.int64)
     train_classes = np.unique(y_tr)
+
+    # --- debug: class imbalance visibility ---
+    counts = np.bincount(y_tr, minlength=num_classes)
+    print(f"[train] n_train={len(y_tr)} class_counts={counts.tolist()}")
     if train_classes.size < 2:
         raise RuntimeError(f"Need >=2 classes in training split; got {train_classes.tolist()}")
 
@@ -469,6 +473,9 @@ def main() -> None:
 
     class_weight_kind = str(cfg.get("cnn.class_weight_kind", "none"))
     class_weights = compute_class_weights(y_tr, num_classes=num_classes, kind=class_weight_kind)
+    print(
+    f"[train] class_weight_kind={class_weight_kind} "
+    f"class_weights={class_weights.numpy().round(3).tolist()}")
 
     label_smoothing = float(cfg.get("cnn.label_smoothing", 0.0))
     grad_clip = float(cfg.get("cnn.grad_clip", 1.0))
