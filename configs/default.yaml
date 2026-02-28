@@ -5,14 +5,13 @@ data:
   split:
     train: 0.70
     val: 0.15
+  image_size: 128
 
 labels:
   # 7 bins:
   # 0–9, 10–19, 20–29, 30–39, 40–49, 50–59, 60+
   # We encode 60+ as [60, 200) so everything >=60 goes to last class.
   bins: [0, 10, 20, 30, 40, 50, 60, 200]
-
-  # Optional (recommended): enforce a range so weird ages don't get silently mapped.
   min_age: 0
   max_age: 120
 
@@ -20,20 +19,60 @@ occlusion:
   types: ["none", "eyes", "mouth", "center"]
   fill: "mean"
 
+# -------- Classical pipelines --------
 pca:
-  components: 100
+  components: 200
+  whiten: false
+
+fisher:
+  pca_components: 300
+  pca_whiten: false
 
 gaussian:
   reg: 0.001
+  shared_cov: true
+  diagonal: true
 
+# -------- CNN pipeline --------
 cnn:
+  device: "cuda"          # "cuda" | "cpu" | "auto"
   backbone: "resnet18"
   pretrained: true
-  epochs: 10
-  batch_size: 64
+
+  # Use ImageNet-sized input for pretrained ResNet
+  image_size: 224
+  epochs: 120
+  batch_size: 128
   lr: 0.0003
   weight_decay: 0.0001
+  num_workers: 4
+  prefetch_factor: 2
 
+  scheduler: "cosine"     # "cosine" or "none"
+  select_metric: "acc"
+
+  # stability / generalization
+  amp: true
+  grad_clip: 1.0
+  label_smoothing: 0.05   # often helps on noisy UTKFace labels
+
+  # imbalance handling
+  class_weight_kind: "none"   # cleaner top-1 acc; switch to "sqrt_inv" if needed
+
+  # augmentations (train only)
+  crop_aug: true
+  cnn.crop_scale_min: 0.90    # gentler crop (was effectively 0.75)
+  cnn.crop_scale_max: 1.00
+  erasing_p: 0.0              # clean-acc run (turn back on for robustness)
+
+  # eval stabilization (val/test)
+  eval_center_crop_frac: 0.90 # reduces background influence; set 0.0 to disable
+
+  # occlusion augmentation (train only)
+  occlusion_aug_prob: 0.0     # clean-acc run (set 0.2 for robustness fine-tune)
+  occlusion_aug_types: ["eyes", "mouth", "center"]
+
+# -------- MLP baseline (if you use it) --------
 mlp:
   hidden_sizes: [512, 256]
   dropout: 0.3

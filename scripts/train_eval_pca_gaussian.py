@@ -50,6 +50,17 @@ def images_to_matrix(
     return X, y
 
 
+def standardize_train_test(Ztr: np.ndarray, Zte: np.ndarray, eps: float = 1e-6) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Standardize features using training mean/std.
+    Returns (Ztr_std, Zte_std, mean, std).
+    """
+    mu = Ztr.mean(axis=0, keepdims=True)
+    sd = Ztr.std(axis=0, keepdims=True)
+    sd = np.maximum(sd, eps)
+    return (Ztr - mu) / sd, (Zte - mu) / sd, mu, sd
+
+
 def save_json(obj: Dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -78,26 +89,42 @@ def main() -> None:
         raise FileNotFoundError(f"Split file not found: {split_path}")
     split = load_split(str(split_path))
 
-    samples = discover_utkface(root, bins, debug=True)
+    # NOTE: keep debug=False for normal runs; debug=True can be noisy/slow depending on your implementation
+    samples = discover_utkface(root, bins)
     if len(samples) == 0:
         raise RuntimeError("No UTKFace samples discovered. Check root path and filtering.")
 
     occ_types = cfg.get("occlusion.types", ["none", "eyes", "mouth", "center"])
     fill = cfg.get("occlusion.fill", "mean")
 
-    Xtr, ytr = images_to_matrix(samples, list(map(int, split.train)), image_size, "none", fill)
+    tr_idx = list(map(int, split.train))
+    te_idx = list(map(int, split.test))
 
-    n_pca = int(cfg.get("classical.pca_components", 200))  # try 200-400 on this dataset
-    pca_model = fit_pca(Xtr, n_components=n_pca, whiten=True)
+    # ---- Train (clean) ----
+    Xtr, ytr = images_to_matrix(samples, tr_idx, image_size, "none", fill)
+
+    # PCA dims: read from YAML pca.components (matches your current yaml)
+    n_pca = int(cfg.get("pca.components", 200))
+
+    # IMPORTANT: whitening often hurts Gaussian classification; default to False
+    whiten = bool(cfg.get("pca.whiten", False))
+    pca_model = fit_pca(Xtr, n_components=n_pca, whiten=whiten)
+
     Ztr = transform_pca(pca_model, Xtr)
 
-    reg = float(cfg.get("classical.gaussian_reg", 1e-3))
-    diagonal = bool(cfg.get("classical.gaussian_diagonal", True))
-    shared_cov = bool(cfg.get("classical.gaussian_shared_cov", False))
+    # Standardize PCA features for stability
+    # (This tends to make Gaussian fitting behave better.)
+    Ztr_std, _, zmu, zsd = standardize_train_test(Ztr, Ztr)
 
-    clf = fit_gaussian_classifier(Ztr, ytr, reg=reg, shared_cov=shared_cov, diagonal=diagonal)
+    # Gaussian hyperparams: read from gaussian.* (matches yaml)
+    reg = float(cfg.get("gaussian.reg", 1e-3))
+    diagonal = bool(cfg.get("gaussian.diagonal", True))
+    shared_cov = bool(cfg.get("gaussian.shared_cov", True))  # often more stable than class-specific
 
-    _, yte_clean = images_to_matrix(samples, list(map(int, split.test)), image_size, "none", fill)
+    clf = fit_gaussian_classifier(Ztr_std, ytr, reg=reg, shared_cov=shared_cov, diagonal=diagonal)
+
+    # Determine K from union of train+test
+    _, yte_clean = images_to_matrix(samples, te_idx, image_size, "none", fill)
     classes_all = np.unique(np.concatenate([ytr, yte_clean]))
     K = int(classes_all.max()) + 1
 
@@ -105,9 +132,14 @@ def main() -> None:
     confmats: Dict[str, List[List[int]]] = {}
 
     for occ in occ_types:
-        Xte, yte = images_to_matrix(samples, list(map(int, split.test)), image_size, str(occ), fill)
+        Xte, yte = images_to_matrix(samples, te_idx, image_size, str(occ), fill)
         Zte = transform_pca(pca_model, Xte)
-        yhat = predict_gaussian(clf, Zte)
+        _, Zte_std, _, _ = standardize_train_test(Ztr, Zte)  # use train stats internally
+        # NOTE: standardize_train_test recomputes mu/std if called this way.
+        # To avoid recompute, do it explicitly:
+        Zte_std = (Zte - zmu) / zsd
+
+        yhat = predict_gaussian(clf, Zte_std)
 
         acc = overall_accuracy(yte, yhat)
         mf1 = macro_f1(yte, yhat)
@@ -125,7 +157,13 @@ def main() -> None:
     res_dir.mkdir(parents=True, exist_ok=True)
 
     joblib.dump(
-        {"pca": pca_model, "gaussian": clf, "config": cfg.raw},
+        {
+            "pca": pca_model,
+            "gaussian": clf,
+            "pca_feature_mean": zmu,
+            "pca_feature_std": zsd,
+            "config": cfg.raw,
+        },
         model_dir / "pca_gaussian.joblib",
     )
 
@@ -137,6 +175,8 @@ def main() -> None:
         "occlusion": {"types": occ_types, "fill": fill},
         "hyperparams": {
             "pca_components": n_pca,
+            "pca_whiten": whiten,
+            "feature_standardize": True,
             "gaussian_reg": reg,
             "gaussian_diagonal": diagonal,
             "gaussian_shared_cov": shared_cov,

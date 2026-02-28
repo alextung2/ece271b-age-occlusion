@@ -45,8 +45,15 @@ def images_to_matrix(
         y_list.append(int(samples[i].y))
 
     X = np.stack(X_list, axis=0).astype(np.float32, copy=False)
-    y = np.array(y_list, dtype=np.int64)
+    y = np.asarray(y_list, dtype=np.int64)
     return X, y
+
+
+def standardize_train_test(Ztr: np.ndarray, Zte: np.ndarray, eps: float = 1e-6) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    mu = Ztr.mean(axis=0, keepdims=True)
+    sd = Ztr.std(axis=0, keepdims=True)
+    sd = np.maximum(sd, eps)
+    return (Ztr - mu) / sd, (Zte - mu) / sd, mu, sd
 
 
 def save_json(obj: Dict, path: Path) -> None:
@@ -86,42 +93,49 @@ def main() -> None:
     occ_types = cfg.get("occlusion.types", ["none", "eyes", "mouth", "center"])
     fill = cfg.get("occlusion.fill", "mean")
 
-    # Gaussian reg
-    reg = float(cfg.get("classical.gaussian_reg", 1e-3))
+    reg = float(cfg.get("gaussian.reg", 1e-3))
+
+    tr_idx = list(map(int, split.train))
+    te_idx = list(map(int, split.test))
 
     # ---- train (clean) ----
-    Xtr, ytr = images_to_matrix(samples, list(map(int, split.train)), image_size, "none", fill)
+    Xtr, ytr = images_to_matrix(samples, tr_idx, image_size, "none", fill)
 
     classes_tr = np.unique(ytr)
     if classes_tr.size < 2:
         raise RuntimeError(f"Need at least 2 classes in training split for LDA, got {classes_tr.tolist()}")
 
     # Determine K from union of train+test
-    _, yte_clean = images_to_matrix(samples, list(map(int, split.test)), image_size, "none", fill)
+    _, yte_clean = images_to_matrix(samples, te_idx, image_size, "none", fill)
     classes_all = np.unique(np.concatenate([ytr, yte_clean]))
     K = int(classes_all.max()) + 1
 
     # ---- Fisherfaces: PCA -> LDA ----
-    # Recommended: PCA to a few hundred dims first
     fisher_pca = int(cfg.get("fisher.pca_components", 300))
-    pca_model = fit_pca(Xtr, n_components=fisher_pca, whiten=True)
+    whiten = bool(cfg.get("fisher.pca_whiten", False))  # default False
+
+    pca_model = fit_pca(Xtr, n_components=fisher_pca, whiten=whiten)
     Ptr = transform_pca(pca_model, Xtr)
 
     lda = fit_lda(Ptr, ytr)
     Ztr = transform_lda(lda, Ptr)
 
-    # ---- Gaussian on LDA features ----
-    # shared_cov tends to be more stable in LDA space
-    g = fit_gaussian_classifier(Ztr, ytr, reg=reg, shared_cov=True, diagonal=False)
+    # Standardize LDA features (helps Gaussian stability)
+    Ztr_std, _, zmu, zsd = standardize_train_test(Ztr, Ztr)
+
+    # Gaussian on LDA features: shared full cov is usually best here
+    g = fit_gaussian_classifier(Ztr_std, ytr, reg=reg, shared_cov=True, diagonal=False)
 
     metrics: Dict[str, Dict[str, float]] = {}
     confmats: Dict[str, List[List[int]]] = {}
 
     for occ in occ_types:
-        Xte, yte = images_to_matrix(samples, list(map(int, split.test)), image_size, str(occ), fill)
+        Xte, yte = images_to_matrix(samples, te_idx, image_size, str(occ), fill)
         Pte = transform_pca(pca_model, Xte)
         Zte = transform_lda(lda, Pte)
-        yhat = predict_gaussian(g, Zte)
+        Zte_std = (Zte - zmu) / zsd
+
+        yhat = predict_gaussian(g, Zte_std)
 
         acc = overall_accuracy(yte, yhat)
         mf1 = macro_f1(yte, yhat)
@@ -139,7 +153,14 @@ def main() -> None:
     res_dir.mkdir(parents=True, exist_ok=True)
 
     joblib.dump(
-        {"pca": pca_model, "lda": lda, "gaussian": g, "config": cfg.raw},
+        {
+            "pca": pca_model,
+            "lda": lda,
+            "gaussian": g,
+            "lda_feature_mean": zmu,
+            "lda_feature_std": zsd,
+            "config": cfg.raw,
+        },
         model_dir / "lda_gaussian.joblib",
     )
 
@@ -151,6 +172,8 @@ def main() -> None:
         "occlusion": {"types": occ_types, "fill": fill},
         "hyperparams": {
             "fisher_pca_components": fisher_pca,
+            "fisher_pca_whiten": whiten,
+            "feature_standardize": True,
             "gaussian_reg": reg,
             "gaussian_shared_cov": True,
             "gaussian_diagonal": False,
