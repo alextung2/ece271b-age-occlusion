@@ -1,18 +1,16 @@
 seed: 271
 
 data:
-  utkface_root: "C:/Users/alex_tung/OneDrive/桌面/ECE 271B/ECE 271B_Age_Occlusion_Project/try_dataset/UTKFace"
-  split:
-    train: 0.70
-    val: 0.15
+  utkface_root: "/Users/taota/Documents/Uni/Master/Statistical learning /Project/ece271b-age-occlusion/try_dataset/UTKFace"
+  train: 0.70
+  val: 0.15
+  image_size: 128
 
 labels:
   # 7 bins:
   # 0–9, 10–19, 20–29, 30–39, 40–49, 50–59, 60+
   # We encode 60+ as [60, 200) so everything >=60 goes to last class.
   bins: [0, 10, 20, 30, 40, 50, 60, 200]
-
-  # Optional (recommended): enforce a range so weird ages don't get silently mapped.
   min_age: 0
   max_age: 120
 
@@ -20,22 +18,64 @@ occlusion:
   types: ["none", "eyes", "mouth", "center"]
   fill: "mean"
 
+# -------- Classical pipelines --------
 pca:
-  components: 100
+  components: 200
+  whiten: false
+
+fisher:
+  pca_components: 300
+  pca_whiten: false
 
 gaussian:
   reg: 0.001
+  shared_cov: true
+  diagonal: true
 
+# -------- CNN pipeline --------
 cnn:
+  device: "cuda"
   backbone: "resnet18"
   pretrained: true
-  epochs: 10
-  batch_size: 64
+
+  image_size: 224
+  epochs: 120
+  batch_size: 128
   lr: 0.0003
   weight_decay: 0.0001
+  num_workers: 4
+  prefetch_factor: 2
 
+  scheduler: "cosine"
+  select_metric: "acc"
+
+  amp: true
+  grad_clip: 1.0
+  label_smoothing: 0.05
+
+  # imbalance handling (this is the big one)
+  class_weight_kind: "sqrt_inv"   # try "effective" if you want higher macro-F1
+
+  # augmentations (train only)
+  crop_aug: true
+  crop_scale_min: 0.85            # a bit stronger than 0.90
+  crop_scale_max: 1.00
+  erasing_p: 0.10                 # small; bump later for robustness
+
+  # eval stabilization (val/test)
+  eval_center_crop_frac: 0.0      # disable first to avoid train/eval mismatch
+
+  # occlusion augmentation (train only)
+  occlusion_aug_prob: 0.0         # keep 0.0 for clean benchmark; fine-tune later
+  occlusion_aug_types: ["eyes", "mouth", "center"]
+
+# -------- MLP baseline (if you use it) --------
 mlp:
-  epochs: 20
+  hidden_sizes: [1024, 512, 256]
+  dropout: 0.4
+  activation: "relu"      #  "gelu"doest work 
+  use_batchnorm: false    # if you’re using LayerNorm inside mlp.py
+  epochs: 80
   batch_size: 128
   lr: 0.001
   weight_decay: 0.0001

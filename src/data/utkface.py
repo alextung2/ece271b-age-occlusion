@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Union, Optional
+from typing import List, Union
 import re
 
 import cv2
@@ -48,6 +48,10 @@ def discover_utkface(
     max_age: int | None = None,
     debug: bool = True,
 ) -> List[UtkSample]:
+    """
+    IMPORTANT: returns samples in a deterministic order (sorted by full path).
+    This is critical because your split file stores indices into this list.
+    """
     root = Path(root)
     assert root.exists(), f"UTKFace root not found: {root}"
     assert root.is_dir(), f"UTKFace root is not a directory: {root}"
@@ -59,7 +63,8 @@ def discover_utkface(
     if min_age is not None and max_age is not None:
         assert min_age <= max_age, "min_age must be <= max_age"
 
-    all_files = [p for p in root.rglob("*") if p.is_file()]
+    # Deterministic traversal: sort paths
+    all_files = sorted((p for p in root.rglob("*") if p.is_file()), key=lambda p: str(p).lower())
 
     samples: List[UtkSample] = []
     scanned = 0
@@ -150,6 +155,21 @@ def _imread_unicode(path: Path, flags: int) -> np.ndarray | None:
         return None
 
 
+def _resize_square(img: np.ndarray, image_size: int) -> np.ndarray:
+    """
+    Resize to (image_size, image_size) with interpolation chosen by scale.
+    """
+    h, w = img.shape[:2]
+    if h <= 0 or w <= 0:
+        return img
+    # If shrinking, use area; if enlarging, use cubic for better detail
+    if image_size < min(h, w):
+        interp = cv2.INTER_AREA
+    else:
+        interp = cv2.INTER_CUBIC
+    return cv2.resize(img, (image_size, image_size), interpolation=interp)
+
+
 def load_image_gray(path: Path, image_size: int) -> np.ndarray:
     """
     Returns float32 grayscale image in [0,1], shape (H,W)
@@ -160,7 +180,7 @@ def load_image_gray(path: Path, image_size: int) -> np.ndarray:
             f"Could not read image (maybe OneDrive placeholder or path issue): {path}\n"
             f"Tip: Right-click the UTKFace folder in File Explorer -> OneDrive -> 'Always keep on this device'."
         )
-    img = cv2.resize(img, (image_size, image_size), interpolation=cv2.INTER_AREA)
+    img = _resize_square(img, int(image_size))
     img = img.astype(np.float32) / 255.0
     return img
 
@@ -176,6 +196,6 @@ def load_image_rgb(path: Path, image_size: int) -> np.ndarray:
             f"Tip: Right-click the UTKFace folder in File Explorer -> OneDrive -> 'Always keep on this device'."
         )
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (image_size, image_size), interpolation=cv2.INTER_AREA)
+    img = _resize_square(img, int(image_size))
     img = img.astype(np.float32) / 255.0
     return img
