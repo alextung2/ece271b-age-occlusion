@@ -1,14 +1,11 @@
 from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
-
 import joblib
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
-
 from src.config import Config
 from src.data.occlusion import occlude_region
 from src.data.splits import load_split
@@ -18,6 +15,7 @@ from src.features.kernel_pca import fit_kpca, suggest_gamma_rbf, transform_kpca
 from src.utils import set_seed
 
 
+#HELPER FUNCTIONS
 def images_to_matrix(
     samples,
     indices: List[int],
@@ -38,62 +36,10 @@ def images_to_matrix(
     X = np.stack(X, axis=0).astype(np.float32)
     y = np.array(y, dtype=np.int64)
     return X, y
-
-
 def save_json(obj: Dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2)
-
-
-# =============================================================================
-# EDIT HERE (Luke Wittemann): This is the ONLY place you should change code.
-#
-# Goal:
-#   Pick hyperparameter combinations that maximize validation macro-F1
-#   (if split.val exists). If there is no val split, the script will just use
-#   the first combo in your lists.
-#
-# Start simple:
-#   gamma_multipliers=[1.0], C_list=[10.0], svm_kernels=["linear"]
-# Then expand gradually by uncommenting lines.
-# =============================================================================
-def choose_hyperparams() -> Dict[str, object]:
-    # ---- switches ----
-    use_scaler = True
-    use_class_weight = False  # set True if macro-F1 << accuracy (imbalance)
-
-    # ---- RBF-KPCA gamma candidates ----
-    # actual gamma used = suggest_gamma_rbf(Xtr) * multiplier
-    gamma_multipliers = [
-        1.0,  # baseline
-        # 1/3,
-        # 3.0,
-        # 10.0,
-    ]
-
-    # ---- SVM C candidates ----
-    C_list = [
-        10.0,  # baseline
-        # 1.0,
-        # 100.0,
-    ]
-
-    # ---- SVM kernel candidates ----
-    svm_kernels = [
-        "linear",  # baseline
-        # "rbf",
-    ]
-
-    return {
-        "use_scaler": use_scaler,
-        "use_class_weight": use_class_weight,
-        "gamma_multipliers": gamma_multipliers,
-        "C_list": C_list,
-        "svm_kernels": svm_kernels,
-    }
-
-
 def _get_val_indices(split) -> Optional[List[int]]:
     if hasattr(split, "val"):
         v = getattr(split, "val")
@@ -103,60 +49,53 @@ def _get_val_indices(split) -> Optional[List[int]]:
     return None
 
 
-def main() -> None:
+#main train/test function to find best performing SVM of given paramater canidates and save it
+def main(use_scaler:bool, use_class_weight:bool, gamma_multipliers:list, C_list:list, svm_kernels:list) -> None:
+    
+
+    #read config
     cfg = Config.load("configs/default.yaml")
     seed = int(cfg.get("seed", 271))
     set_seed(seed)
-
+    #check for path to dataset 
     root = cfg.get("data.utkface_root")
     if root is None or not Path(root).exists():
         raise FileNotFoundError(f"UTKFace root does not exist: {root}")
-
+    #get labels
     bins = cfg.get("labels.bins")
     if bins is None:
         raise ValueError("Config missing 'labels.bins'.")
-
     image_size = int(cfg.get("data.image_size", 128))
-
+    #set output path for splits
     split_path = Path("outputs/splits/utkface_split.json")
     if not split_path.exists():
         raise FileNotFoundError(f"Split file not found: {split_path}")
     split = load_split(str(split_path))
-
+    #import samples
     samples = discover_utkface(root, bins)
     if len(samples) == 0:
         raise RuntimeError("No UTKFace samples discovered. Check root path and filtering.")
 
-    # occlusion settings
+    #occlusion settings
     occ_types = cfg.get("occlusion.types", ["none", "eyes", "mouth", "center"])
     fill = cfg.get("occlusion.fill", "mean")
-
-    # KPCA settings
+    #KPCA settings
     kpca_k = int(cfg.get("classical.kpca_components", 200))
     kpca_kernel = cfg.get("classical.kpca_kernel", "rbf")
     kpca_gamma_cfg = cfg.get("classical.kpca_gamma", None)
 
-    # Luke's editable settings
-    hp = choose_hyperparams()
-    use_scaler = bool(hp["use_scaler"])
-    use_class_weight = bool(hp["use_class_weight"])
-    gamma_multipliers = list(hp["gamma_multipliers"])
-    C_list = list(hp["C_list"])
-    svm_kernels = list(hp["svm_kernels"])
+    
 
     # Train data (always clean)
     Xtr, ytr = images_to_matrix(samples, list(map(int, split.train)), image_size, occlusion_type="none", fill=fill)
-
     # Optional scaling
     scaler = None
     if use_scaler:
         scaler = StandardScaler(with_mean=True, with_std=True)
         Xtr = scaler.fit_transform(Xtr)
-
     # Val split (if available)
     val_indices = _get_val_indices(split)
     have_val = val_indices is not None and len(val_indices) > 0
-
     Xva = yva = None
     if have_val:
         Xva, yva = images_to_matrix(samples, list(map(int, val_indices)), image_size, occlusion_type="none", fill=fill)
@@ -175,22 +114,19 @@ def main() -> None:
 
     class_weight = "balanced" if use_class_weight else None
 
-    # Pick best combo by val macro-F1 (if val exists), else first combo
-    best = {
-        "val_macro_f1": -1.0,
-        "kpca_gamma": gamma_candidates[0],
-        "svm_C": float(C_list[0]),
-        "svm_kernel": str(svm_kernels[0]),
-        "kpca": None,
-        "svm": None,
-    }
+    #set best to first candidates by default
+    best = {"val_macro_f1": -1.0, "kpca_gamma": gamma_candidates[0], "svm_C": float(C_list[0]),
+        "svm_kernel": str(svm_kernels[0]), "kpca": None, "svm": None,}
 
+    #Run through all permutations of parameter candidates 
     for gamma in gamma_candidates:
+        print("Checking gamma = "+str(gamma))
         kpca = fit_kpca(Xtr, n_components=kpca_k, kernel=kpca_kernel, gamma=gamma, random_state=seed)
         Ztr = transform_kpca(kpca, Xtr)
-
         for C in C_list:
+            print("     Checking C = "+str(C))
             for sk in svm_kernels:
+                print("         Checking kernel "+str(sk))
                 svm = SVC(C=float(C), kernel=str(sk), class_weight=class_weight)
                 svm.fit(Ztr, ytr)
 
@@ -200,18 +136,9 @@ def main() -> None:
                     mf1 = float(macro_f1(yva, yhat_va))  # type: ignore[arg-type]
                 else:
                     mf1 = 0.0
-
+                print("     Checking C = "+str(C)+" with f1: "+str(best["val_macro_f1"]))
                 if (not have_val and best["kpca"] is None) or (have_val and mf1 > best["val_macro_f1"]):
-                    best.update(
-                        {
-                            "val_macro_f1": mf1,
-                            "kpca_gamma": float(gamma),
-                            "svm_C": float(C),
-                            "svm_kernel": str(sk),
-                            "kpca": kpca,
-                            "svm": svm,
-                        }
-                    )
+                    best.update({ "val_macro_f1": mf1, "kpca_gamma": float(gamma), "svm_C": float(C), "svm_kernel": str(sk), "kpca": kpca, "svm": svm,} )
 
         if not have_val:
             break
@@ -221,20 +148,9 @@ def main() -> None:
     assert kpca is not None and svm is not None
 
     if have_val:
-        print(
-            "[kpca_svm] picked via VAL:",
-            f"gamma={best['kpca_gamma']:.6g}",
-            f"C={best['svm_C']:.6g}",
-            f"svm_kernel={best['svm_kernel']}",
-            f"val_macro_f1={best['val_macro_f1']:.4f}",
-        )
+        print("[kpca_svm] picked via VAL:", f"gamma={best['kpca_gamma']:.6g}", f"C={best['svm_C']:.6g}", f"svm_kernel={best['svm_kernel']}", f"val_macro_f1={best['val_macro_f1']:.4f}")
     else:
-        print(
-            "[kpca_svm] no val split; using first combo:",
-            f"gamma={best['kpca_gamma']:.6g}",
-            f"C={best['svm_C']:.6g}",
-            f"svm_kernel={best['svm_kernel']}",
-        )
+        print("[kpca_svm] no val split; using first combo:", f"gamma={best['kpca_gamma']:.6g}", f"C={best['svm_C']:.6g}", f"svm_kernel={best['svm_kernel']}")
 
     # Robust K from union of train+test labels (clean)
     Xte_clean, yte_clean = images_to_matrix(samples, list(map(int, split.test)), image_size, occlusion_type="none", fill=fill)
@@ -286,7 +202,7 @@ def main() -> None:
                 },
             },
         },
-        model_dir / "kpca_svm.joblib",
+        model_dir / ("kpca_svm"+"_useScalar"+str(use_scaler)+"_useWeights"+str(use_class_weight)+".joblib"),
     )
 
     result_obj = {
@@ -309,11 +225,21 @@ def main() -> None:
         "train_classes": np.unique(ytr).tolist(),
         "eval_classes_union_train_test": classes_all.tolist(),
     }
-
-    save_json(result_obj, res_dir / "kpca_svm.json")
+    save_json(result_obj, res_dir / ("kpca_svm"+"_useScalar"+str(use_scaler)+"_useWeights"+str(use_class_weight)+".joblib"))
     print(f"Saved model -> {model_dir / 'kpca_svm.joblib'}")
     print(f"Saved results -> {res_dir / 'kpca_svm.json'}")
 
 
-if __name__ == "__main__":
-    main()
+#========================================================================
+#HYPER-PARAMETERS
+#use_scaler = False
+#use_class_weight = True
+gamma_multipliers = [1, 3, 10] #gamma multipliers for PCA
+C_list = [0.1, 1, 10, 100 ,1000]  #c canidates for SVM
+svm_kernels = ["linear", "rbf"] #kernels for SVM
+#========================================================================
+
+#run KPCA and SVM for all binary combinations of use_scaler and use_class_weight booleans
+for use_scaler in [True, False]:
+    for use_class_weight in [True, False]:
+        main(use_scaler, use_class_weight, gamma_multipliers, C_list, svm_kernels)
