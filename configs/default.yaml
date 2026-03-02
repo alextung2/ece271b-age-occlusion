@@ -1,7 +1,7 @@
 seed: 271
 
 data:
-  utkface_root: "/Users/taota/Documents/Uni/Master/Statistical learning /Project/ece271b-age-occlusion/try_dataset/UTKFace"
+  utkface_root: "C:/Users/alex_tung/OneDrive/桌面/ECE 271B/ECE 271B_Age_Occlusion_Project/try_dataset/UTKFace"
   train: 0.70
   val: 0.15
   image_size: 128
