@@ -1,10 +1,10 @@
 seed: 271
 
 data:
-  utkface_root: "/Users/taota/Documents/Uni/Master/Statistical learning /Project/ece271b-age-occlusion/try_dataset/UTKFace"
-  train: 0.70
-  val: 0.15
-  image_size: 128
+  utkface_root: "C:/Users/Luke/Desktop/School/ECE 271B - Statistical Learning 2/Quizes/Python Code/Project/ece271b-age-occlusion/try_dataset/UTKFace"
+  split:
+    train: 0.70
+    val: 0.15
 
 labels:
   # 7 bins:
