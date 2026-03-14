@@ -51,7 +51,6 @@ def _get_val_indices(split) -> Optional[List[int]]:
 
 #main train/test function to find best performing SVM of given paramater canidates and save it
 def main(use_scaler:bool, use_class_weight:bool, gamma_multipliers:list, C_list:list, svm_kernels:list) -> None:
-    
 
     #read config
     cfg = Config.load("configs/default.yaml")
@@ -80,7 +79,7 @@ def main(use_scaler:bool, use_class_weight:bool, gamma_multipliers:list, C_list:
     occ_types = cfg.get("occlusion.types", ["none", "eyes", "mouth", "center"])
     fill = cfg.get("occlusion.fill", "mean")
     #KPCA settings
-    kpca_k = int(cfg.get("classical.kpca_components", 200))
+    kpca_k = int(cfg.get("classical.kpca_components", 300))
     kpca_kernel = cfg.get("classical.kpca_kernel", "rbf")
     kpca_gamma_cfg = cfg.get("classical.kpca_gamma", None)
 
@@ -126,7 +125,6 @@ def main(use_scaler:bool, use_class_weight:bool, gamma_multipliers:list, C_list:
         for C in C_list:
             print("     Checking C = "+str(C))
             for sk in svm_kernels:
-                print("         Checking kernel "+str(sk))
                 svm = SVC(C=float(C), kernel=str(sk), class_weight=class_weight)
                 svm.fit(Ztr, ytr)
 
@@ -136,7 +134,7 @@ def main(use_scaler:bool, use_class_weight:bool, gamma_multipliers:list, C_list:
                     mf1 = float(macro_f1(yva, yhat_va))  # type: ignore[arg-type]
                 else:
                     mf1 = 0.0
-                print("     Checking C = "+str(C)+" with f1: "+str(best["val_macro_f1"]))
+                print("         Checking kernel "+str(sk)+" with f1: "+str(best["val_macro_f1"]))
                 if (not have_val and best["kpca"] is None) or (have_val and mf1 > best["val_macro_f1"]):
                     best.update({ "val_macro_f1": mf1, "kpca_gamma": float(gamma), "svm_C": float(C), "svm_kernel": str(sk), "kpca": kpca, "svm": svm,} )
 
@@ -202,7 +200,7 @@ def main(use_scaler:bool, use_class_weight:bool, gamma_multipliers:list, C_list:
                 },
             },
         },
-        model_dir / ("kpca_svm"+"_useScalar"+str(use_scaler)+"_useWeights"+str(use_class_weight)+".joblib"),
+        model_dir / "kpca_svm.joblib",
     )
 
     result_obj = {
@@ -225,7 +223,7 @@ def main(use_scaler:bool, use_class_weight:bool, gamma_multipliers:list, C_list:
         "train_classes": np.unique(ytr).tolist(),
         "eval_classes_union_train_test": classes_all.tolist(),
     }
-    save_json(result_obj, res_dir / ("kpca_svm"+"_useScalar"+str(use_scaler)+"_useWeights"+str(use_class_weight)+".joblib"))
+    save_json(result_obj, res_dir / f"kpca_svm_scaler{use_scaler}_classweight{use_class_weight}.json")
     print(f"Saved model -> {model_dir / 'kpca_svm.joblib'}")
     print(f"Saved results -> {res_dir / 'kpca_svm.json'}")
 
@@ -234,12 +232,13 @@ def main(use_scaler:bool, use_class_weight:bool, gamma_multipliers:list, C_list:
 #HYPER-PARAMETERS
 #use_scaler = False
 #use_class_weight = True
-gamma_multipliers = [1, 3, 10] #gamma multipliers for PCA
-C_list = [0.1, 1, 10, 100 ,1000]  #c canidates for SVM
+gamma_multipliers = [ 1, 3, 10] #gamma multipliers for PCA
+C_list = [0.1, 1, 10, 100]  #c canidates for SVM
 svm_kernels = ["linear", "rbf"] #kernels for SVM
 #========================================================================
 
 #run KPCA and SVM for all binary combinations of use_scaler and use_class_weight booleans
 for use_scaler in [True, False]:
     for use_class_weight in [True, False]:
+        print("Trying use_scaler="+str(use_scaler)+" and use_class_weight="+str(use_class_weight))
         main(use_scaler, use_class_weight, gamma_multipliers, C_list, svm_kernels)
